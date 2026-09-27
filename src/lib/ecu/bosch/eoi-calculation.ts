@@ -401,6 +401,10 @@ export function computeEoiMatrix(
   ecuType: string,
   options: EoiOptions
 ): EoiMatrixResult | null {
+  if (!ecuType || !ecuType.toUpperCase().includes("EDC15P")) {
+    return null;
+  }
+
   const { codeblockId, durationMode, manualDurationIndex = 0, applySoiLimiter = false } = options;
 
   const inBlock = (m: DetectedMapLite) =>

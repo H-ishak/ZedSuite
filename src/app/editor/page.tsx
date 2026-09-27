@@ -4778,6 +4778,8 @@ function EditorPageContent() {
   };
 
   const hasEoiMaps = useMemo(() => {
+    const isEdc15P = (projectData?.ecu_type || "").toUpperCase().includes("EDC15P");
+    if (!isEdc15P) return false;
     if (!projectData?.detectionResults?.maps) return false;
     const maps = projectData.detectionResults.maps;
     const hasSoi = maps.some((m: MapData) => {
@@ -4795,7 +4797,7 @@ function EditorPageContent() {
       return n.includes("duration") && !n.includes("selector");
     });
     return hasSoi && hasDuration;
-  }, [projectData?.detectionResults?.maps]);
+  }, [projectData?.ecu_type, projectData?.detectionResults?.maps]);
 
   const openEoiCalculation = async () => {
     if (!projectData?.fileId) return;
