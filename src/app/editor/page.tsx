@@ -32,6 +32,7 @@ import {
   PanelLeftOpen,
   Search,
   FileUp,
+  Timer,
 } from "lucide-react";
 import { PiHeadCircuit } from "react-icons/pi";
 import { HexdumpViewer, type MapRegion } from "@/components/hexdump-viewer";
@@ -55,6 +56,7 @@ import {
 import { DTCModal } from "@/components/dtc-modal";
 import { isMacOS } from "@/lib/platform";
 import { PowerEstimateModal } from "@/components/power-estimate-modal";
+import { EoiModal } from "@/components/eoi-modal";
 import type { FileRecord } from "@/lib/types";
 import { PROJECT_NAME_MAX_LENGTH } from "@/lib/types";
 import { SolutionsModal } from "@/components/solutions-modal";
@@ -2131,6 +2133,32 @@ function EditorPageContent() {
       return { ...prev, x, width };
     });
   }, [powerMinWidth]);
+
+  // EOI calculation state
+  const [eoiFile, setEoiFile] = useState<FileRecord | null>(null);
+  const [eoiLayout, setEoiLayout] = useState({ x: 90, y: 50, width: 880, height: 600 });
+  const [eoiZIndex, setEoiZIndex] = useState(101);
+  const [eoiMinWidth, setEoiMinWidth] = useState(760);
+  const eoiAutoHeightRef = useRef(false);
+  const handleEoiContentHeight = useCallback((contentHeight: number) => {
+    if (!eoiAutoHeightRef.current) return;
+    setEoiLayout((prev) => {
+      const rect = workspaceRef.current?.getBoundingClientRect();
+      const wanted = contentHeight + 40;
+      const height = Math.max(360, rect ? Math.min(wanted, rect.height) : wanted);
+      if (Math.abs(height - prev.height) < 1) return prev;
+      return { ...prev, height };
+    });
+  }, []);
+  useEffect(() => {
+    setEoiLayout((prev) => {
+      if (prev.width >= eoiMinWidth) return prev;
+      const rect = workspaceRef.current?.getBoundingClientRect();
+      const width = rect ? Math.min(eoiMinWidth, rect.width) : eoiMinWidth;
+      const x = rect ? Math.max(0, Math.min(prev.x, rect.width - width)) : prev.x;
+      return { ...prev, x, width };
+    });
+  }, [eoiMinWidth]);
 
   // Tracks the display-vs-file row/col flip state for each open map. MapViewer
   // reorders rows/cols for human-friendly display (e.g. RPM descending), so
@@ -4749,6 +4777,52 @@ function EditorPageContent() {
     }
   };
 
+  const hasEoiMaps = useMemo(() => {
+    if (!projectData?.detectionResults?.maps) return false;
+    const maps = projectData.detectionResults.maps;
+    const hasSoi = maps.some((m: MapData) => {
+      const n = (m.name || "").toLowerCase();
+      return (
+        (n.includes("start of injection") || n.includes("soi")) &&
+        !n.includes("selector") &&
+        !n.includes("limiter") &&
+        !n.includes("limit") &&
+        !n.includes("bip")
+      );
+    });
+    const hasDuration = maps.some((m: MapData) => {
+      const n = (m.name || "").toLowerCase();
+      return n.includes("duration") && !n.includes("selector");
+    });
+    return hasSoi && hasDuration;
+  }, [projectData?.detectionResults?.maps]);
+
+  const openEoiCalculation = async () => {
+    if (!projectData?.fileId) return;
+    if (olsProjectBlocked()) return;
+    if (eoiFile) {
+      bringEoiToFront();
+      return;
+    }
+    try {
+      const record = await localStore.getFile(projectData.fileId);
+      if (!record) return;
+      const rect = workspaceRef.current?.getBoundingClientRect();
+      if (rect) {
+        const width = Math.min(Math.max(880, eoiMinWidth), Math.max(480, rect.width - 8));
+        const height = Math.min(620, Math.max(360, rect.height - 8));
+        const origin = cascadeOrigin(mapLayouts.size + (powerFile ? 1 : 0));
+        const { x, y } = clampPosition(origin.x, origin.y, width, height);
+        setEoiLayout({ x, y, width, height });
+      }
+      eoiAutoHeightRef.current = true;
+      setEoiZIndex(Math.max(hexdumpZIndex, previewZIndex, powerZIndex, ...openMaps.map((_, i) => 50 + i)) + 1);
+      setEoiFile({ ...record, detection_data: { maps: projectData.detectionResults.maps } });
+    } catch (e) {
+      console.error("eoi calculation: project record unavailable", e);
+    }
+  };
+
   // Handle applying changes to similar maps
   const handleApplyToSimilarMaps = useCallback((sourceMapAddress: number, targetMaps: number[], copyType: 'modifications' | 'all') => {
     if (!projectData) return;
@@ -6429,8 +6503,13 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
   };
 
   const bringPowerToFront = () => {
-    const maxZ = Math.max(hexdumpZIndex, previewZIndex, ...openMaps.map((_, i) => 50 + i));
+    const maxZ = Math.max(hexdumpZIndex, previewZIndex, eoiZIndex, ...openMaps.map((_, i) => 50 + i));
     setPowerZIndex(maxZ + 1);
+  };
+
+  const bringEoiToFront = () => {
+    const maxZ = Math.max(hexdumpZIndex, previewZIndex, powerZIndex, ...openMaps.map((_, i) => 50 + i));
+    setEoiZIndex(maxZ + 1);
   };
 
   // Store pour garder les infos de sélection de chaque map
@@ -6987,6 +7066,16 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
               >
                 <Gauge className="w-4 h-4" style={{ color: '#ffffff' }} />
               </button>
+              {hasEoiMaps && (
+                <button
+                  type="button"
+                  onClick={() => void openEoiCalculation()}
+                  title={t.sidebar.eoiCalculation}
+                  className={`relative overflow-hidden rounded-lg backdrop-blur-md border w-9 h-9 flex items-center justify-center transition-all duration-300 hover:scale-105 hover:shadow-xl ${theme === 'light' ? 'bg-gradient-to-l from-emerald-600 via-teal-500 to-cyan-500 border-black/10 hover:shadow-emerald-600/35' : 'bg-gradient-to-l from-emerald-600/90 via-teal-500/90 to-cyan-500/90 border-white/15 hover:shadow-emerald-500/35'}`}
+                >
+                  <Timer className="w-4 h-4" style={{ color: '#ffffff' }} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setIsCompareOpen(true)}
@@ -7300,6 +7389,22 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
               <Gauge className="w-5 h-5 transition-colors duration-300" style={{ color: '#ffffff' }} />
               <span className="font-medium text-sm whitespace-nowrap" style={{ color: '#ffffff' }}>{t.sidebar.powerEstimate}</span>
             </button>
+
+            {/* Calcul EOI (EDC15) */}
+            {hasEoiMaps && (
+              <button
+                onClick={() => void openEoiCalculation()}
+                className={`relative overflow-hidden rounded-xl backdrop-blur-md border px-4 py-2 flex items-center justify-center gap-2.5 transition-all duration-500 group hover:scale-105 hover:shadow-2xl ${
+                  theme === 'light'
+                    ? 'bg-gradient-to-l from-emerald-600 via-teal-500 to-cyan-500 border-black/10 hover:shadow-emerald-600/35'
+                    : 'bg-gradient-to-l from-emerald-600/90 via-teal-500/90 to-cyan-500/90 border-white/15 hover:shadow-emerald-500/35'
+                }`}
+              >
+                <div className="absolute inset-0 bg-gradient-to-l from-transparent via-white/20 to-transparent translate-x-full group-hover:-translate-x-full transition-transform duration-1000" />
+                <Timer className="w-5 h-5 transition-colors duration-300" style={{ color: '#ffffff' }} />
+                <span className="font-medium text-sm whitespace-nowrap" style={{ color: '#ffffff' }}>{t.sidebar.eoiCalculation}</span>
+              </button>
+            )}
 
             {/* Comparaison de versions — dégradé violet ; déplacé depuis la
                 barre d'outils (07/09), qui perd 70 px de largeur minimale */}
@@ -8127,6 +8232,47 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
                     onContentHeightChange={handlePowerContentHeight}
                     file={powerFile}
                     onClose={() => setPowerFile(null)}
+                    live={{
+                      versionId: currentVersionId || "",
+                      getState: getLivePowerState,
+                      refreshKey: powerRefreshKey,
+                    }}
+                  />
+                </FloatingWindow>
+              )}
+
+              {/* Fenêtre EOI — flottante */}
+              {eoiFile && projectData && (
+                <FloatingWindow
+                  title={t.eoiModal.title}
+                  icon={<Timer className="w-4 h-4" />}
+                  zIndex={eoiZIndex}
+                  layout={eoiLayout}
+                  onLayoutChange={(l) => {
+                    eoiAutoHeightRef.current = false;
+                    setEoiLayout(l);
+                  }}
+                  onClose={() => setEoiFile(null)}
+                  onFocus={bringEoiToFront}
+                  minWidth={Math.max(480, eoiMinWidth)}
+                  getWindowHeaderBg={getWindowHeaderBg}
+                  getWindowHeaderTextColor={getWindowHeaderTextColor}
+                  getBorderColor={getBorderColor}
+                  getButtonHoverClass={getButtonHoverClass}
+                  getWindowBg={getWindowBg}
+                  workspaceRef={workspaceRef}
+                  closeTitle={t.common.close}
+                  onDragActiveChange={(active) => {
+                    setOverlayCursor('move');
+                    setIsWindowDragActive(active);
+                  }}
+                >
+                  <EoiModal
+                    embedded
+                    onMinWidthChange={setEoiMinWidth}
+                    onContentHeightChange={handleEoiContentHeight}
+                    file={eoiFile}
+                    onClose={() => setEoiFile(null)}
                     live={{
                       versionId: currentVersionId || "",
                       getState: getLivePowerState,
