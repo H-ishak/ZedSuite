@@ -7,11 +7,12 @@ The historical thanks, to the people whose earlier work made this project possib
 ## Contributions
 
 - [@grantUser](https://github.com/grantUser) — reading WinOLS `.ols` project files: the container, its metadata and its saved ROM versions (1.2.3). That contribution is what opened the door to the whole "bring your own map definitions" mode.
+- [@fracotegato](https://github.com/fracotegato) — closing a map by double-clicking it in the list, like WinOLS (1.2.5).
 - [@COSSART-FR](https://github.com/COSSART-FR) — power estimate of a version created by importing a file (1.1.8). Also the Bosch EDC16CP31 Mercedes detector, in progress.
 - [@bferd](https://github.com/bferd) — the Linux version: the AppImage and .deb builds, and the update dialog that opens the release page on Linux (1.2.1).
 - [@Hitsauskone](https://github.com/Hitsauskone) — asked for the Linux version, built by @bferd (1.2.1).
 - [@AlfonsoMad](https://github.com/AlfonsoMad) — copy and paste with Excel, EDC Suite and other programs (1.2.1).
-- [@henry66z](https://github.com/henry66z) — EDC15VM 038906012M: the single injection timing map kept on tuned files and the MAP/MAF switch found on every VP37 software (1.1.7), then the axes of the boost correction by temperature and of the MAP linearisation (1.1.8).
+- [@henry66z](https://github.com/henry66z) — EDC15VM 038906012M: the single injection timing map kept on tuned files and the MAP/MAF switch found on every VP37 software (1.1.7), then the axes of the boost correction by temperature and of the MAP linearisation (1.1.8), and the factor that could not be typed with a decimal nor applied without reopening the project, the copy to Excel without the axes, and the edits lost after the inverted view (1.2.5).
 - [@georgiminchev04](https://github.com/georgiminchev04) — the MAP/MAF switch on the compact EDC15P software (1.1.8), the airflow limiter of an EDC15VM whose axis has eleven points (1.1.9), and the MAP/MAF switch on EDC16, which was missing from the app entirely (1.2.0).
 - [@Matt010101](https://github.com/Matt010101) — an EDC16U34 airflow limiter left at zero by its software, the report that showed why the EDC16 sensor switch had to be visible (1.2.0).
 - [@Informapa](https://github.com/Informapa) — a 2.5 V6 EDC15VM taken for an EDC15P, which left it with almost no map (1.2.0).
