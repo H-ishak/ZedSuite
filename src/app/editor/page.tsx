@@ -22,6 +22,7 @@ import {
   ChevronUp,
   Cpu,
   MoreVertical,
+  Wrench,
   X,
   Eye,
   RefreshCw,
@@ -360,6 +361,48 @@ const getDefaultMapDisplaySettings = (map: MapData): MapDisplaySettings => {
   };
 };
 
+// Champ numérique de la fenêtre Propriétés : le texte tapé reste tel quel
+// pendant la saisie (« 0. », « -», « 1,5 »), la valeur n'est transmise que
+// quand elle est un nombre fini. Avant, `parseFloat(...) || 1` renvoyait 1
+// dès qu'on tapait « 0 » : impossible d'entrer 0.1 autrement qu'à la molette
+// (issue #47).
+function NumInput({
+  value,
+  onChange,
+  className,
+  allowZero = true,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+  className: string;
+  allowZero?: boolean;
+}) {
+  const [text, setText] = useState<string>(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setText(String(value));
+  }, [value, editing]);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={text}
+      className={className}
+      onFocus={() => setEditing(true)}
+      onChange={(e) => {
+        const v = e.target.value;
+        setText(v);
+        const n = parseFloat(v.replace(',', '.'));
+        if (Number.isFinite(n) && (allowZero || n !== 0)) onChange(n);
+      }}
+      onBlur={() => {
+        setEditing(false);
+        setText(String(value));
+      }}
+    />
+  );
+}
+
 // Composant MapPropertiesModal pour éditer les paramètres d'affichage d'une map
 interface MapPropertiesModalProps {
   mapData: MapData;
@@ -616,11 +659,11 @@ function MapPropertiesModal({
                   <label className={labelClass}>{t.mapProperties.factor}</label>
                   <div className={`flex items-center gap-2 text-sm ${isLight ? 'text-gray-700' : 'text-white'}`}>
                     <span>{t.mapProperties.value}</span>
-                    <input type="number" step="0.001" value={localSettings.factor} onChange={(e) => updateMapSetting('factor', parseFloat(e.target.value) || 1)} className={`w-20 ${smallInputClass}`} />
+                    <NumInput value={localSettings.factor} onChange={(n) => updateMapSetting('factor', n)} allowZero={false} className={`w-20 ${smallInputClass}`} />
                     <span>× Eprom +</span>
-                    <input type="number" step="0.1" value={localSettings.offset} onChange={(e) => updateMapSetting('offset', parseFloat(e.target.value) || 0)} className={`w-16 ${smallInputClass}`} />
+                    <NumInput value={localSettings.offset} onChange={(n) => updateMapSetting('offset', n)} className={`w-16 ${smallInputClass}`} />
                     <span>÷</span>
-                    <input type="number" step="1" value={localSettings.divisor} onChange={(e) => updateMapSetting('divisor', parseFloat(e.target.value) || 1)} className={`w-14 ${smallInputClass}`} />
+                    <NumInput value={localSettings.divisor} onChange={(n) => updateMapSetting('divisor', n)} allowZero={false} className={`w-14 ${smallInputClass}`} />
                   </div>
                 </div>
               </div>
@@ -672,11 +715,11 @@ function MapPropertiesModal({
                   <label className={labelClass}>{t.mapProperties.factor}</label>
                   <div className={`flex items-center gap-2 text-sm ${isLight ? 'text-gray-700' : 'text-white'}`}>
                     <span>{t.mapProperties.value}</span>
-                    <input type="number" step="0.001" value={localSettings.xAxis.factor} onChange={(e) => updateXAxisSetting('factor', parseFloat(e.target.value) || 1)} className={`w-20 ${smallInputClass}`} />
+                    <NumInput value={localSettings.xAxis.factor} onChange={(n) => updateXAxisSetting('factor', n)} allowZero={false} className={`w-20 ${smallInputClass}`} />
                     <span>× Eprom +</span>
-                    <input type="number" step="0.1" value={localSettings.xAxis.offset} onChange={(e) => updateXAxisSetting('offset', parseFloat(e.target.value) || 0)} className={`w-16 ${smallInputClass}`} />
+                    <NumInput value={localSettings.xAxis.offset} onChange={(n) => updateXAxisSetting('offset', n)} className={`w-16 ${smallInputClass}`} />
                     <span>÷</span>
-                    <input type="number" step="1" value={localSettings.xAxis.divisor} onChange={(e) => updateXAxisSetting('divisor', parseFloat(e.target.value) || 1)} className={`w-14 ${smallInputClass}`} />
+                    <NumInput value={localSettings.xAxis.divisor} onChange={(n) => updateXAxisSetting('divisor', n)} allowZero={false} className={`w-14 ${smallInputClass}`} />
                   </div>
                 </div>
                 <div className="w-24">
@@ -738,11 +781,11 @@ function MapPropertiesModal({
                   <label className={labelClass}>{t.mapProperties.factor}</label>
                   <div className={`flex items-center gap-2 text-sm ${isLight ? 'text-gray-700' : 'text-white'}`}>
                     <span>{t.mapProperties.value}</span>
-                    <input type="number" step="0.001" value={localSettings.yAxis.factor} onChange={(e) => updateYAxisSetting('factor', parseFloat(e.target.value) || 1)} className={`w-20 ${smallInputClass}`} />
+                    <NumInput value={localSettings.yAxis.factor} onChange={(n) => updateYAxisSetting('factor', n)} allowZero={false} className={`w-20 ${smallInputClass}`} />
                     <span>× Eprom +</span>
-                    <input type="number" step="0.1" value={localSettings.yAxis.offset} onChange={(e) => updateYAxisSetting('offset', parseFloat(e.target.value) || 0)} className={`w-16 ${smallInputClass}`} />
+                    <NumInput value={localSettings.yAxis.offset} onChange={(n) => updateYAxisSetting('offset', n)} className={`w-16 ${smallInputClass}`} />
                     <span>÷</span>
-                    <input type="number" step="1" value={localSettings.yAxis.divisor} onChange={(e) => updateYAxisSetting('divisor', parseFloat(e.target.value) || 1)} className={`w-14 ${smallInputClass}`} />
+                    <NumInput value={localSettings.yAxis.divisor} onChange={(n) => updateYAxisSetting('divisor', n)} allowZero={false} className={`w-14 ${smallInputClass}`} />
                   </div>
                 </div>
                 <div className="w-24">
@@ -5086,8 +5129,20 @@ function EditorPageContent() {
         // Pour "Ori", réinitialiser les modifications (pas de restauration sessionStorage)
         setAllMapModifications(new Map());
         setMapAxisLabels(new Map());
+        setBinaryModifications(new Map());
+        if (originalFileDataRef.current) {
+          setProjectData((prevData) => {
+            if (!prevData) return prevData;
+            return {
+              ...prevData,
+              file_data: [...originalFileDataRef.current!],
+            };
+          });
+          clearMapDataCache();
+        }
       }
 
+      setPowerRefreshKey((k) => k + 1);
       setShowVersionDropdown(false);
 
       showInlineNotification(t.notifications.versionLoaded);
@@ -6213,6 +6268,41 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
     return twin ?? null;
   };
 
+  // Premier clic d'un double-clic sur une ligne de la liste (issue #46)
+  const sidebarClickRef = useRef<{ address: number; wasOpen: boolean; at: number } | null>(null);
+
+  // Menu du bouton Outils (sidebar dépliée ou repliée) : fermé au clic
+  // ailleurs ou à l'action choisie
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  const toolsMenuRef = useRef<HTMLDivElement | null>(null);
+  const toolsMenuCollapsedRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!toolsMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (toolsMenuRef.current?.contains(target) || toolsMenuCollapsedRef.current?.contains(target)) return;
+      setToolsMenuOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [toolsMenuOpen]);
+  // Menu du bouton Outils : vide pour l'instant (décision du 28/09), le
+  // premier outil arrive à la version suivante
+  const renderToolsMenu = (placement: 'below' | 'side') => (
+    <div
+      className={`absolute z-50 min-w-[220px] p-1.5 border rounded-lg shadow-lg ${placement === 'below' ? 'top-full right-0 mt-1' : 'top-0 left-full ml-2'}`}
+      style={{
+        backgroundColor: theme === 'light' ? 'rgba(255,255,255,0.92)' : theme === 'oled' ? 'rgba(16,16,19,0.96)' : 'rgba(24,27,37,0.92)',
+        backdropFilter: 'blur(14px)',
+        WebkitBackdropFilter: 'blur(14px)',
+        borderColor: getBorderColor(),
+        color: getTextColor(),
+      }}
+    >
+      <div className="px-3 py-1.5 text-sm opacity-60 select-none">{t.sidebar.toolsEmpty}</div>
+    </div>
+  );
+
   const handleMapClick = (clicked: MapData) => {
     // Block map clicks when mappack is locked
     if (!mappackUnlocked) return;
@@ -6945,7 +7035,30 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
                               return (
                                 <button
                                   key={index}
-                                  onClick={() => handleMapClick(map)}
+                                  onClick={() => {
+                                    // Le double-clic passe d'abord par deux clics : on note
+                                    // au PREMIER si la fenêtre était déjà ouverte, c'est ce
+                                    // qui décide de la fermeture (issue #46)
+                                    const target = detectorTwinOf(map) ?? map;
+                                    const now = Date.now();
+                                    const prev = sidebarClickRef.current;
+                                    if (!prev || prev.address !== target.address || now - prev.at > 500) {
+                                      sidebarClickRef.current = {
+                                        address: target.address,
+                                        wasOpen: openMaps.some((m) => m.address === target.address),
+                                        at: now,
+                                      };
+                                    }
+                                    handleMapClick(map);
+                                  }}
+                                  onDoubleClick={() => {
+                                    const target = detectorTwinOf(map) ?? map;
+                                    const prev = sidebarClickRef.current;
+                                    sidebarClickRef.current = null;
+                                    if (prev && prev.address === target.address && prev.wasOpen) {
+                                      handleCloseMapWindow(target.address);
+                                    }
+                                  }}
                                   onContextMenu={(e) => {
                                     e.preventDefault();
                                     setMapTreeContextMenu({ x: e.clientX, y: e.clientY, map });
@@ -7078,14 +7191,17 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
                   <Timer className="w-4 h-4" style={{ color: '#ffffff' }} />
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => setIsCompareOpen(true)}
-                title={t.toolbar.compare}
-                className={`relative overflow-hidden rounded-lg backdrop-blur-md border w-9 h-9 flex items-center justify-center transition-all duration-300 hover:scale-105 hover:shadow-xl ${theme === 'light' ? 'bg-gradient-to-l from-violet-600 via-purple-500 to-fuchsia-500 border-black/10 hover:shadow-violet-600/35' : 'bg-gradient-to-l from-violet-600/90 via-purple-500/90 to-fuchsia-500/90 border-white/15 hover:shadow-violet-500/35'}`}
-              >
-                <ArrowLeftRight className="w-4 h-4" style={{ color: '#ffffff' }} />
-              </button>
+              <div className="relative" ref={toolsMenuCollapsedRef}>
+                <button
+                  type="button"
+                  onClick={() => setToolsMenuOpen((v) => !v)}
+                  title={t.sidebar.tools}
+                  className={`relative overflow-hidden rounded-lg backdrop-blur-md border w-9 h-9 flex items-center justify-center transition-all duration-300 hover:scale-105 hover:shadow-xl ${theme === 'light' ? 'bg-gradient-to-l from-violet-600 via-purple-500 to-fuchsia-500 border-black/10 hover:shadow-violet-600/35' : 'bg-gradient-to-l from-violet-600/90 via-purple-500/90 to-fuchsia-500/90 border-white/15 hover:shadow-violet-500/35'}`}
+                >
+                  <Wrench className="w-4 h-4" style={{ color: '#ffffff' }} />
+                </button>
+                {toolsMenuOpen && renderToolsMenu('side')}
+              </div>
             </div>
           </div>
         )}
@@ -7127,16 +7243,29 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
           <div data-tauri-drag-region className="space-y-2 text-sm">
             <div>
               <div className="text-xs" style={{ color: theme === 'light' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}>{t.sidebar.project}</div>
-              <div className="relative" onMouseEnter={() => showTooltip('project')} onMouseLeave={hideTooltip}>
-                <div className="font-medium truncate" style={{ color: getTextColor() }}>
-                  {projectData.project_name}
-                </div>
-                {tooltipVisible === 'project' && (
-                  <div className="pointer-events-none absolute left-0 top-full mt-1 z-[9999] rounded px-2 py-1 text-xs font-normal shadow-lg whitespace-nowrap"
-                    style={{ backgroundColor: theme === 'light' ? '#1e1e1e' : '#e5e5e5', color: theme === 'light' ? '#fff' : '#000' }}>
+              {/* Même rangée que la liste des versions (flex-1 + bouton p-1) :
+                  les « … » du nom s'arrêtent au bord droit de la liste, et le
+                  bouton des infos du projet est en face du nom */}
+              <div className="flex items-center gap-3">
+                <div className="relative flex-1 min-w-0" onMouseEnter={() => showTooltip('project')} onMouseLeave={hideTooltip}>
+                  <div className="font-medium truncate" style={{ color: getTextColor() }}>
                     {projectData.project_name}
                   </div>
-                )}
+                  {tooltipVisible === 'project' && (
+                    <div className="pointer-events-none absolute left-0 top-full mt-1 z-[9999] rounded px-2 py-1 text-xs font-normal shadow-lg whitespace-nowrap"
+                      style={{ backgroundColor: theme === 'light' ? '#1e1e1e' : '#e5e5e5', color: theme === 'light' ? '#fff' : '#000' }}>
+                      {projectData.project_name}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={() => setShowProjectInfoModal(true)}
+                  className={`p-1 rounded ${getButtonHoverClass()} transition-colors flex-shrink-0`}
+                  title={t.sidebar.projectInfo}
+                  style={{ color: theme === 'light' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(255, 255, 255, 0.7)' }}
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
               </div>
             </div>
 
@@ -7161,12 +7290,12 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
                   <ChevronDownIcon className="w-3 h-3 flex-shrink-0 ml-auto" style={{ color: theme === 'light' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(255, 255, 255, 0.7)' }} />
                 </button>
                 <button
-                  onClick={() => setShowProjectInfoModal(true)}
-                  className={`p-1 rounded ${getButtonHoverClass()} transition-colors`}
-                  title={t.sidebar.projectInfo}
+                  onClick={() => setIsCompareOpen(true)}
+                  className={`p-1 rounded ${getButtonHoverClass()} transition-colors flex-shrink-0`}
+                  title={t.toolbar.compare}
                   style={{ color: theme === 'light' ? 'rgba(0, 0, 0, 0.7)' : 'rgba(255, 255, 255, 0.7)' }}
                 >
-                  <MoreVertical className="w-4 h-4" />
+                  <ArrowLeftRight className="w-4 h-4" />
                 </button>
               </div>
               
@@ -7408,20 +7537,24 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
               </button>
             )}
 
-            {/* Comparaison de versions — dégradé violet ; déplacé depuis la
-                barre d'outils (07/09), qui perd 70 px de largeur minimale */}
-            <button
-              onClick={() => setIsCompareOpen(true)}
-              className={`relative overflow-hidden rounded-xl backdrop-blur-md border px-4 py-2 flex items-center justify-center gap-2.5 transition-all duration-500 group hover:scale-105 hover:shadow-2xl ${
-                theme === 'light'
-                  ? 'bg-gradient-to-l from-violet-600 via-purple-500 to-fuchsia-500 border-black/10 hover:shadow-violet-600/35'
-                  : 'bg-gradient-to-l from-violet-600/90 via-purple-500/90 to-fuchsia-500/90 border-white/15 hover:shadow-violet-500/35'
-              }`}
-            >
-              <div className="absolute inset-0 bg-gradient-to-l from-transparent via-white/20 to-transparent translate-x-full group-hover:-translate-x-full transition-transform duration-1000" />
-              <ArrowLeftRight className="w-5 h-5 transition-colors duration-300" style={{ color: '#ffffff' }} />
-              <span className="font-medium text-sm whitespace-nowrap" style={{ color: '#ffffff' }}>{t.toolbar.compare}</span>
-            </button>
+            {/* Outils — dégradé violet, à la place de Comparer (passé en face
+                de la liste des versions le 28/09) : petit menu des outils du
+                projet */}
+            <div className={`relative ${hasEoiMaps ? 'col-span-2' : ''}`} ref={toolsMenuRef}>
+              <button
+                onClick={() => setToolsMenuOpen((v) => !v)}
+                className={`relative overflow-hidden rounded-xl backdrop-blur-md border px-4 py-2 w-full flex items-center justify-center gap-2.5 transition-all duration-500 group hover:scale-105 hover:shadow-2xl ${
+                  theme === 'light'
+                    ? 'bg-gradient-to-l from-violet-600 via-purple-500 to-fuchsia-500 border-black/10 hover:shadow-violet-600/35'
+                    : 'bg-gradient-to-l from-violet-600/90 via-purple-500/90 to-fuchsia-500/90 border-white/15 hover:shadow-violet-500/35'
+                }`}
+              >
+                <div className="absolute inset-0 bg-gradient-to-l from-transparent via-white/20 to-transparent translate-x-full group-hover:-translate-x-full transition-transform duration-1000" />
+                <Wrench className="w-5 h-5 transition-colors duration-300" style={{ color: '#ffffff' }} />
+                <span className="font-medium text-sm whitespace-nowrap" style={{ color: '#ffffff' }}>{t.sidebar.tools}</span>
+              </button>
+              {toolsMenuOpen && renderToolsMenu('below')}
+            </div>
           </div>
         </div>
 
@@ -7462,7 +7595,7 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
                   bringHexdumpToFront();
                 }}
                 className={`flex items-center gap-2 w-full min-w-0 px-2 py-1.5 rounded ${theme === 'light' ? 'hover:bg-black/5' : 'hover:bg-white/5'} transition-colors group`}
-                title="Ouvrir le hexdump"
+                title={t.sidebar.openHexdump}
               >
                 {/* Point d'état lié au checksum — même couleur que la ligne Checksum */}
                 <span className="w-4 h-4 flex-shrink-0 flex items-center justify-center">
@@ -8280,6 +8413,12 @@ await axios.put("/api/versioning/map-edits", { versionId: currentVersionId, edit
                       getState: getLivePowerState,
                       refreshKey: powerRefreshKey,
                     }}
+                    liveBytes={
+                      projectData?.file_data
+                        ? Uint8Array.from(getLivePowerState().bytes)
+                        : undefined
+                    }
+                    maps={projectData?.detectionResults?.maps}
                   />
                 </FloatingWindow>
               )}

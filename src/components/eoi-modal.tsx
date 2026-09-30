@@ -37,6 +37,8 @@ interface EoiModalProps {
   embedded?: boolean;
   onMinWidthChange?: (px: number) => void;
   onContentHeightChange?: (px: number) => void;
+  maps?: any[];
+  liveBytes?: Uint8Array;
 }
 
 export function EoiModal({
@@ -46,6 +48,8 @@ export function EoiModal({
   embedded = false,
   onMinWidthChange,
   onContentHeightChange,
+  maps: mapsProp,
+  liveBytes,
 }: EoiModalProps) {
   const liveRef = useRef<LiveEoiSource | undefined>(live);
   liveRef.current = live;
@@ -58,8 +62,11 @@ export function EoiModal({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Parse maps from file detection data
+  // Parse maps from prop or file detection data
   const maps = useMemo(() => {
+    if (mapsProp && mapsProp.length > 0) {
+      return mapsProp;
+    }
     try {
       const detection =
         typeof file.detection_data === "string"
@@ -69,7 +76,7 @@ export function EoiModal({
     } catch {
       return [];
     }
-  }, [file.detection_data]);
+  }, [mapsProp, file.detection_data]);
 
   // Codeblock options
   const codeblockOptions = useMemo(() => getEoiCodeblocks(maps), [maps]);
@@ -142,7 +149,12 @@ export function EoiModal({
       let edits: Array<{ map_address: number; payload?: any }> = [];
 
       const currentLive = liveRef.current;
-      if (currentLive) {
+      if (liveBytes && liveBytes.length > 0) {
+        bytes = liveBytes;
+        if (currentLive) {
+          edits = currentLive.getState().edits || [];
+        }
+      } else if (currentLive) {
         const state = currentLive.getState();
         bytes = state.bytes;
         edits = state.edits || [];
@@ -195,6 +207,9 @@ export function EoiModal({
     unit,
     applySoiLimiter,
     live?.refreshKey,
+    live?.versionId,
+    liveBytes,
+    maps,
   ]);
 
   // Color classes for cell statuses
@@ -441,6 +456,22 @@ export function EoiModal({
               ° BTDC
             </button>
           </div>
+
+          {/* Refresh / Recalculate Button */}
+          <button
+            type="button"
+            onClick={() => void calculate()}
+            disabled={loading}
+            title={(t.common as any)?.refresh || "Refresh calculation"}
+            className={`px-2 py-1 rounded-lg border text-xs flex items-center gap-1 font-medium transition-colors ${
+              L
+                ? "bg-white hover:bg-slate-50 border-slate-300 text-slate-700 shadow-sm"
+                : "bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200"
+            }`}
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+            <span>{(t.common as any)?.refresh || "Refresh"}</span>
+          </button>
         </div>
       </div>
 

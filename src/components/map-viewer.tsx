@@ -67,6 +67,23 @@ interface InternalClipboard {
   type: 'cell' | 'xAxis' | 'yAxis';
   rows: number;
   cols: number;
+  /** Axes du bloc copié (libellés X des colonnes, Y des lignes), quand la
+   *  copie les emportait : ils sont recollés sur les colonnes / lignes
+   *  couvertes (issue #47). */
+  axes?: { x: string[]; y: string[] };
+}
+
+/** Un bloc « valeurs + axes » tel qu'Excel le rend : coin haut-gauche vide,
+ *  première ligne = axe X, première colonne = axe Y, le reste = valeurs. */
+function splitGridAxes(grid: string[][]): { values: string[][]; axes: { x: string[]; y: string[] } } | null {
+  if (grid.length < 2 || (grid[0]?.length ?? 0) < 2) return null;
+  if (grid[0][0] !== '') return null;
+  const isNum = (v: string) => v !== '' && !Number.isNaN(Number(v));
+  const x = grid[0].slice(1);
+  const y = grid.slice(1).map((r) => r[0] ?? '');
+  if (!x.some(isNum) || !y.some(isNum)) return null;
+  if (!x.every((v) => v === '' || isNum(v)) || !y.every((v) => v === '' || isNum(v))) return null;
+  return { values: grid.slice(1).map((r) => r.slice(1)), axes: { x, y } };
 }
 
 // Backed by localStorage so a copy in one tab is paste-able in another tab.
@@ -104,7 +121,10 @@ function writeClipboard(value: InternalClipboard | null): void {
   // sélection se colle telle quelle dans Excel, EDC Suite ou un éditeur
   // (issue #30). Asynchrone, sans bloquer la copie interne.
   if (value !== null) {
-    void writeSystemClipboardText(gridToText(value.values)).then((ok) => {
+    const text = value.axes
+      ? gridToText([['', ...value.axes.x], ...value.values.map((row, i) => [value.axes!.y[i] ?? '', ...row])])
+      : gridToText(value.values);
+    void writeSystemClipboardText(text).then((ok) => {
       systemClipboardWriteFailed = !ok;
     });
   }
@@ -124,6 +144,10 @@ async function readClipboardPreferSystem(target: 'cell' | 'axis'): Promise<Inter
   if (target === 'axis') {
     const flat = grid.flat().filter((v) => v !== '');
     return { values: flat.map((v) => [v]), type: 'xAxis', rows: flat.length, cols: 1 };
+  }
+  const withAxes = splitGridAxes(grid);
+  if (withAxes) {
+    return { values: withAxes.values, axes: withAxes.axes, type: 'cell', rows: withAxes.values.length, cols: withAxes.values[0]?.length ?? 0 };
   }
   return { values: grid, type: 'cell', rows: grid.length, cols: grid[0]?.length ?? 0 };
 }
@@ -146,6 +170,9 @@ interface CachedMapData {
   apiCols?: number;
   // User invert-display override in effect for this cached view (null = aucun)
   invert?: boolean | null;
+  /** Facteurs / offsets / précisions de la fenêtre Propriétés en vigueur :
+   *  un changement de facteur doit recalculer la vue (issue #47). */
+  scale?: string;
 }
 
 // Cache global en m├®moire (persiste pendant la session)
@@ -546,7 +573,7 @@ export function MapViewer({
   onSelectionChange,
   onPlot3DDataChange,
   onOpenProperties,
-  displaySettings,
+  displaySettings: displaySettingsProp,
   onToggleInvertDisplay,
   disableTableColors = false,
   disableGraphColors = false,
@@ -560,6 +587,14 @@ export function MapViewer({
   isActive = false,
   ecuType,
 }: MapViewerProps) {
+  // Le parent recrée l'objet displaySettings à chaque rendu : on n'en garde
+  // qu'une version stable (même contenu = même objet). Sinon l'extraction et
+  // l'effet d'initialisation repartaient à chaque rendu du parent et
+  // écrasaient une valeur tout juste saisie — « plus rien ne se modifie après
+  // le bouton d'inversion » (issue #47).
+  const displaySettingsSig = JSON.stringify(displaySettingsProp ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const displaySettings = useMemo(() => displaySettingsProp, [displaySettingsSig]);
   // Use controlled viewMode if provided, otherwise use internal state
   const [internalViewMode, setInternalViewMode] = useState<ViewMode>("text");
   const viewMode = controlledViewMode ?? internalViewMode;
@@ -1043,6 +1078,20 @@ const skipAutoSizeRef = useRef<boolean>(false);
   // Bornes de la valeur affichée (N75 : 0..100 %, sinon plage du type brut
   // avec le facteur/offset effectifs) — appliquées à toute saisie : édition,
   // collage, +/-, pastille Ajouter/Pourcentage/Remplir.
+  // Facteur / offset effectifs des valeurs affichées : pour convertir les
+  // modifications en cours quand ils changent dans Propriétés (issue #47)
+  const effMapScale = useMemo(() => {
+    const ds = displaySettings?.map;
+    const dsFactor = ds && typeof ds.factor === 'number' && isFinite(ds.factor)
+      ? ds.factor / (typeof ds.divisor === 'number' && isFinite(ds.divisor) && ds.divisor !== 0 ? ds.divisor : 1)
+      : undefined;
+    return {
+      factor: dsFactor ?? (mapData.correction_factor ?? 1.0),
+      offset: ds && typeof ds.offset === 'number' && isFinite(ds.offset) ? ds.offset : (mapData.offset ?? 0.0),
+    };
+  }, [mapData, displaySettings]);
+  const appliedScaleRef = useRef<{ address: number; factor: number; offset: number } | null>(null);
+
   const valueRange = useMemo(() => {
     const ds = displaySettings?.map;
     const dsFactor = ds && typeof ds.factor === 'number' && isFinite(ds.factor)
@@ -1055,12 +1104,23 @@ const skipAutoSizeRef = useRef<boolean>(false);
   const clampValue = (v: number): number => clampMapValue(v, valueRange);
   const applyIncrement = (v: number, sign: 1 | -1): number =>
     clampValue(incrementIsPercent ? v * (1 + (sign * incrementValue) / 100) : v + sign * incrementValue);
+  // Les axes ne sont pas bornés par la plage de la map : un axe de régime
+  // (0..5355) subissait la borne d'une map en mg/st (0..655.35) au +/-
+  const applyAxisIncrement = (v: number, sign: 1 | -1): number =>
+    incrementIsPercent ? v * (1 + (sign * incrementValue) / 100) : v + sign * incrementValue;
   const incrementUnit = incrementIsPercent ? '%' : '';
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [dragStart, setDragStart] = useState<{ row: number; col: number } | null>(null);
   const [isCtrlDragging, setIsCtrlDragging] = useState<boolean>(false);
   const [initialSelection, setInitialSelection] = useState<Set<string>>(new Set());
   const [hasMovedDuringDrag, setHasMovedDuringDrag] = useState<boolean>(false);
+  // Point de départ du glisser en coordonnées d'AFFICHAGE étendues aux axes
+  // (ligne -1 = axe X, colonne -1 = axe Y) ; avec Ctrl, les sélections au
+  // moment du clic sont conservées et le rectangle s'y ajoute
+  const dragAnchorRef = useRef<{
+    r: number; c: number; ctrl: boolean;
+    cells0: Set<string>; xs0: Set<number>; ys0: Set<number>;
+  } | null>(null);
 
   // États pour la sélection des cellules d'axes
   const [selectedXAxisCells, setSelectedXAxisCells] = useState<Set<number>>(new Set());
@@ -1665,6 +1725,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
     // Arrêter le drag des axes
     setIsAxisDragging(false);
     setAxisDragStart(null);
+    dragAnchorRef.current = null;
   }, [isCtrlDragging, hasMovedDuringDrag, dragStart]);
 
   // Pr├®charger Plotly d├¿s le montage du composant pour ├®liminer la latence
@@ -1800,13 +1861,24 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
         return;
       }
 
+      // ── Ctrl+A : toute la map (la copie emporte alors les axes) ──
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault();
+        const all = new Set<string>();
+        mapValues.forEach((row, r) => row.forEach((_, c) => all.add(getCellKey(r, c))));
+        setSelectedXAxisCells(new Set(displayXAxisLabels.map((_, i) => i)));
+        setSelectedYAxisCells(new Set(displayYAxisLabels.map((_, i) => i)));
+        setSelectedCells(all);
+        return;
+      }
+
       if (!hasSelection) return;
 
       // ── Ctrl+C / Ctrl+V : mêmes règles que Copier / Coller du menu ──
       if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
         e.preventDefault();
         if (selectedCells.size > 0) {
-          const copiedCount = copyCellSelection();
+          const copiedCount = copyCellSelection(selectedXAxisCells.size > 0 || selectedYAxisCells.size > 0);
           if (copiedCount > 0) toast({ title: t.mapViewer.copy, description: `${copiedCount} value(s) copied` });
         } else if (selectedXAxisCells.size > 0) {
           const indices = Array.from(selectedXAxisCells).sort((a, b) => a - b);
@@ -1894,7 +1966,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
           selectedXAxisCells.forEach(idx => {
             mutateDisplayXAxis(idx, cur => {
               const v = parseFloat(cur);
-              return isNaN(v) ? cur : String(applyIncrement(v, 1));
+              return isNaN(v) ? cur : String(applyAxisIncrement(v, 1));
             });
           });
         }
@@ -1902,7 +1974,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
           selectedYAxisCells.forEach(idx => {
             mutateDisplayYAxis(idx, cur => {
               const v = parseFloat(cur);
-              return isNaN(v) ? cur : String(applyIncrement(v, 1));
+              return isNaN(v) ? cur : String(applyAxisIncrement(v, 1));
             });
           });
         }
@@ -1945,7 +2017,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
           selectedXAxisCells.forEach(idx => {
             mutateDisplayXAxis(idx, cur => {
               const v = parseFloat(cur);
-              return isNaN(v) ? cur : String(applyIncrement(v, -1));
+              return isNaN(v) ? cur : String(applyAxisIncrement(v, -1));
             });
           });
         }
@@ -1953,7 +2025,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
           selectedYAxisCells.forEach(idx => {
             mutateDisplayYAxis(idx, cur => {
               const v = parseFloat(cur);
-              return isNaN(v) ? cur : String(applyIncrement(v, -1));
+              return isNaN(v) ? cur : String(applyAxisIncrement(v, -1));
             });
           });
         }
@@ -2181,9 +2253,10 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
     // AND the user's invert-display override (le cache stocke axesSwapped, qui
     // dépend de invertDisplay ; sans ça le toggle servirait une vue périmée).
     const cacheInvert = displaySettings?.map?.invertDisplay ?? null;
+    const cacheScale = JSON.stringify(displaySettings ? [displaySettings.map, displaySettings.xAxis, displaySettings.yAxis] : null);
     if (cached && cached.fileDataHash === fileDataHash && cached.mapAddress === mapData.address && cached.version === CACHE_VERSION
         && cached.apiRows === currentApiRows && cached.apiCols === currentApiCols
-        && cached.invert === cacheInvert) {
+        && cached.invert === cacheInvert && cached.scale === cacheScale) {
       return {
         mapValues: cached.mapValues,
         xAxisLabels: cached.xAxisLabels,
@@ -2952,6 +3025,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       apiRows: apiRows,
       apiCols: apiCols,
       invert: cacheInvert,
+      scale: cacheScale,
     };
     mapDataCache.set(cacheKey, cacheData);
 
@@ -2995,18 +3069,38 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       originalXAxisLabelsRef.current = [...extractedData.xAxisLabels];
       originalYAxisLabelsRef.current = [...extractedData.yAxisLabels];
 
+      // Facteur / offset changés dans Propriétés sur la map déjà ouverte :
+      // les modifications en cours sont des valeurs affichées à l'ANCIENNE
+      // échelle, on les ramène au brut puis à la nouvelle (issue #47)
+      const prevScale = appliedScaleRef.current;
+      const scaleChanged = !!prevScale && prevScale.address === mapData.address
+        && (prevScale.factor !== effMapScale.factor || prevScale.offset !== effMapScale.offset)
+        && prevScale.factor !== 0;
+      appliedScaleRef.current = { address: mapData.address, ...effMapScale };
+      let pending: Record<string, number> | undefined = initialChangedCells;
+      if (scaleChanged) {
+        const source = Object.keys(changedCells).length > 0 ? changedCells : (initialChangedCells ?? {});
+        const converted: Record<string, number> = {};
+        for (const [key, v] of Object.entries(source)) {
+          converted[key] = ((v - prevScale!.offset) / prevScale!.factor) * effMapScale.factor + effMapScale.offset;
+        }
+        pending = converted;
+        setChangedCells(converted);
+      }
+
       // Appliquer les modifications si elles existent
       let initialValues = extractedData.mapValues;
-      if (initialChangedCells && Object.keys(initialChangedCells).length > 0) {
+      if (pending && Object.keys(pending).length > 0) {
+        const applied = pending;
         initialValues = extractedData.mapValues.map((row, rowIndex) =>
           row.map((originalValue, colIndex) => {
             const cellKey = `${rowIndex}-${colIndex}`;
-            return initialChangedCells[cellKey] !== undefined
-              ? initialChangedCells[cellKey]
+            return applied[cellKey] !== undefined
+              ? applied[cellKey]
               : originalValue;
           })
         );
-        setChangedCells(initialChangedCells);
+        if (!scaleChanged) setChangedCells(applied);
       }
 
       setMapValues(initialValues);
@@ -3246,9 +3340,13 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       return;
     }
 
-    // Désélectionner les cellules d'axes quand on clique sur une cellule de données
-    setSelectedXAxisCells(new Set());
-    setSelectedYAxisCells(new Set());
+    // Sans Ctrl, une cellule de données remplace la sélection des axes ;
+    // avec Ctrl, les axes déjà sélectionnés restent (sélection mixte)
+    if (!(e.ctrlKey || e.metaKey)) {
+      setSelectedXAxisCells(new Set());
+      setSelectedYAxisCells(new Set());
+    }
+    setDragAnchor(displayRow, displayCol, e);
 
     if (e.ctrlKey || e.metaKey) {
       // Ctrl+clic: mode sélection additive avec glissement
@@ -3267,44 +3365,60 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
     }
   };
 
-  const handleCellMouseEnter = (displayRow: number, displayCol: number) => {
-    if (!isDragging || !dragStart) return;
-    const { row, col } = toMapCoords(displayRow, displayCol);
+  // Départ d'un glisser, en coordonnées d'affichage étendues aux axes
+  const setDragAnchor = (r: number, c: number, e: React.MouseEvent) => {
+    const ctrl = e.ctrlKey || e.metaKey;
+    dragAnchorRef.current = {
+      r, c, ctrl,
+      cells0: ctrl ? new Set(selectedCells) : new Set(),
+      xs0: ctrl ? new Set(selectedXAxisCells) : new Set(),
+      ys0: ctrl ? new Set(selectedYAxisCells) : new Set(),
+    };
+  };
 
-    // Vérifier si on a bougé de la cellule de départ
-    const hasMoved = dragStart.row !== row || dragStart.col !== col;
-
-    if (hasMoved) {
-      setHasMovedDuringDrag(true);
-    }
-
-    // Si mode Ctrl et qu'on n'a pas encore bougé, ne rien faire
-    // (on attendra le mouseUp pour toggle la cellule)
-    if (isCtrlDragging && !hasMoved) {
-      return;
-    }
-
-    // Calculer la zone rectangulaire entre dragStart et la cellule actuelle
-    const minRow = Math.min(dragStart.row, row);
-    const maxRow = Math.max(dragStart.row, row);
-    const minCol = Math.min(dragStart.col, col);
-    const maxCol = Math.max(dragStart.col, col);
-
-    const newSelection = new Set<string>();
-    for (let r = minRow; r <= maxRow; r++) {
-      for (let c = minCol; c <= maxCol; c++) {
-        newSelection.add(getCellKey(r, c));
+  // Rectangle entre le point de départ et (r2, c2) : cellules du tableau à
+  // l'intérieur, plus l'axe X si le rectangle touche l'en-tête (ligne -1),
+  // plus l'axe Y s'il touche les libellés (colonne -1)
+  const applyDragRect = (r2: number, c2: number) => {
+    const a = dragAnchorRef.current;
+    if (!a) return;
+    const minR = Math.min(a.r, r2), maxR = Math.max(a.r, r2);
+    const minC = Math.min(a.c, c2), maxC = Math.max(a.c, c2);
+    const totalRows = displayMapValues.length;
+    const totalCols = displayMapValues[0]?.length ?? 0;
+    const cells = new Set<string>(a.cells0);
+    for (let r = Math.max(0, minR); r <= Math.min(maxR, totalRows - 1); r++) {
+      for (let c = Math.max(0, minC); c <= Math.min(maxC, totalCols - 1); c++) {
+        const m = toMapCoords(r, c);
+        cells.add(getCellKey(m.row, m.col));
       }
     }
+    const xs = new Set<number>(a.xs0);
+    if (minR <= -1) for (let c = Math.max(0, minC); c <= Math.min(maxC, displayXAxisLabels.length - 1); c++) xs.add(c);
+    const ys = new Set<number>(a.ys0);
+    if (minC <= -1) for (let r = Math.max(0, minR); r <= Math.min(maxR, displayYAxisLabels.length - 1); r++) ys.add(r);
+    setSelectedCells(cells);
+    setSelectedXAxisCells(xs);
+    setSelectedYAxisCells(ys);
+  };
 
-    // Si mode Ctrl, fusionner avec la sélection initiale
-    if (isCtrlDragging) {
-      const combined = new Set(initialSelection);
-      newSelection.forEach(key => combined.add(key));
-      setSelectedCells(combined);
-    } else {
-      setSelectedCells(newSelection);
+  const handleCellMouseEnter = (displayRow: number, displayCol: number) => {
+    if (!(isDragging || isAxisDragging) || !dragAnchorRef.current) return;
+
+    if (dragStart) {
+      const { row, col } = toMapCoords(displayRow, displayCol);
+      // Vérifier si on a bougé de la cellule de départ
+      const hasMoved = dragStart.row !== row || dragStart.col !== col;
+      if (hasMoved) {
+        setHasMovedDuringDrag(true);
+      }
+      // Si mode Ctrl et qu'on n'a pas encore bougé, ne rien faire
+      // (on attendra le mouseUp pour toggle la cellule)
+      if (isCtrlDragging && !hasMoved) {
+        return;
+      }
     }
+    applyDragRect(displayRow, displayCol);
   };
 
   const handleContextMenu = (e: React.MouseEvent, displayRow: number, displayCol: number, value: number) => {
@@ -3396,7 +3510,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       return toDisplayCoords(row, col);
     });
 
-  const copyCellSelection = (): number => {
+  const copyCellSelection = (withAxes: boolean = false): number => {
     const cells = selectedDisplayCells();
     if (cells.length === 0) return 0;
     const selectedKeys = new Set(cells.map((c) => `${c.row}-${c.col}`));
@@ -3417,7 +3531,19 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       }
       values.push(rowValues);
     }
-    writeClipboard({ values, type: 'cell', rows: maxRow - minRow + 1, cols: maxCol - minCol + 1 });
+    // Toute la map sélectionnée (Ctrl+A) : les axes partent avec, comme
+    // dans WinOLS ; un bloc partiel les emporte seulement sur demande
+    const wholeMap =
+      cells.length === displayMapValues.length * (displayMapValues[0]?.length ?? 0) &&
+      minRow === 0 && minCol === 0 &&
+      maxRow === displayMapValues.length - 1 && maxCol === (displayMapValues[0]?.length ?? 0) - 1;
+    const axes = withAxes || wholeMap
+      ? {
+          x: displayXAxisLabels.slice(minCol, maxCol + 1).map((v) => v ?? ''),
+          y: displayYAxisLabels.slice(minRow, maxRow + 1).map((v) => v ?? ''),
+        }
+      : undefined;
+    writeClipboard({ values, type: 'cell', rows: maxRow - minRow + 1, cols: maxCol - minCol + 1, axes });
     return cells.length;
   };
 
@@ -3442,6 +3568,16 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
         pasted++;
       });
     });
+    if (clip.axes) {
+      clip.axes.x.forEach((label, colOffset) => {
+        const displayIdx = startCol + colOffset;
+        if (label !== '' && displayIdx < totalCols) mutateDisplayXAxis(displayIdx, () => label);
+      });
+      clip.axes.y.forEach((label, rowOffset) => {
+        const displayIdx = startRow + rowOffset;
+        if (label !== '' && displayIdx < totalRows) mutateDisplayYAxis(displayIdx, () => label);
+      });
+    }
     return pasted;
   };
 
@@ -3461,9 +3597,13 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       return;
     }
 
-    // Désélectionner les cellules normales et l'axe Y
-    setSelectedCells(new Set());
-    setSelectedYAxisCells(new Set());
+    // Sans Ctrl, l'axe remplace la sélection ; avec Ctrl, cellules et
+    // autre axe déjà sélectionnés restent (sélection mixte)
+    if (!(e.ctrlKey || e.metaKey)) {
+      setSelectedCells(new Set());
+      setSelectedYAxisCells(new Set());
+    }
+    setDragAnchor(-1, index, e);
 
     if (e.ctrlKey || e.metaKey) {
       // Mode additive
@@ -3484,15 +3624,8 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
   };
 
   const handleXAxisMouseEnter = (index: number) => {
-    if (!isAxisDragging || !axisDragStart || axisDragStart.axis !== 'x') return;
-
-    const minIdx = Math.min(axisDragStart.index, index);
-    const maxIdx = Math.max(axisDragStart.index, index);
-    const newSelection = new Set<number>();
-    for (let i = minIdx; i <= maxIdx; i++) {
-      newSelection.add(i);
-    }
-    setSelectedXAxisCells(newSelection);
+    if (!(isDragging || isAxisDragging) || !dragAnchorRef.current) return;
+    applyDragRect(-1, index);
   };
 
   // Handlers pour la sélection des cellules d'axes Y
@@ -3511,9 +3644,11 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
       return;
     }
 
-    // Désélectionner les cellules normales et l'axe X
-    setSelectedCells(new Set());
-    setSelectedXAxisCells(new Set());
+    if (!(e.ctrlKey || e.metaKey)) {
+      setSelectedCells(new Set());
+      setSelectedXAxisCells(new Set());
+    }
+    setDragAnchor(index, -1, e);
 
     if (e.ctrlKey || e.metaKey) {
       // Mode additive
@@ -3534,15 +3669,8 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
   };
 
   const handleYAxisMouseEnter = (index: number) => {
-    if (!isAxisDragging || !axisDragStart || axisDragStart.axis !== 'y') return;
-
-    const minIdx = Math.min(axisDragStart.index, index);
-    const maxIdx = Math.max(axisDragStart.index, index);
-    const newSelection = new Set<number>();
-    for (let i = minIdx; i <= maxIdx; i++) {
-      newSelection.add(i);
-    }
-    setSelectedYAxisCells(newSelection);
+    if (!(isDragging || isAxisDragging) || !dragAnchorRef.current) return;
+    applyDragRect(index, -1);
   };
 
   // Number of decimals to display for an axis label, matching the format
@@ -3954,7 +4082,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
               style={!invertButtonActive ? { color: theme === 'light' ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.55)' } : undefined}
               onClick={handleToggleInvert}
               onMouseDown={(e) => e.stopPropagation()}
-              title={invertButtonActive ? "Rétablir l'orientation du fichier (lignes ↔ colonnes)" : "Inverser l'affichage (lignes ↔ colonnes)"}
+              title={invertButtonActive ? t.mapViewer.restoreOrientation : t.mapViewer.invertDisplay}
             >
               <Repeat2 className="w-4 h-4" strokeWidth={2.5} />
             </button>
@@ -4249,7 +4377,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
               style={!invertButtonActive ? { color: theme === 'light' ? 'rgba(0, 0, 0, 0.55)' : 'rgba(255, 255, 255, 0.55)' } : undefined}
               onClick={handleToggleInvert}
               onMouseDown={(e) => e.stopPropagation()}
-              title={invertButtonActive ? "Rétablir l'orientation du fichier (lignes ↔ colonnes)" : "Inverser l'affichage (lignes ↔ colonnes)"}
+              title={invertButtonActive ? t.mapViewer.restoreOrientation : t.mapViewer.invertDisplay}
             >
               <Repeat2 className="w-4 h-4" strokeWidth={2.5} />
             </button>
@@ -4435,7 +4563,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                       className="px-3 py-1.5 text-left rounded hover:bg-white/10 transition-colors"
                       onClick={() => {
                         if (contextMenu.type === 'cell') {
-                          const copiedCount = copyCellSelection();
+                          const copiedCount = copyCellSelection(selectedXAxisCells.size > 0 || selectedYAxisCells.size > 0);
                           if (copiedCount === 0) { setContextMenu(null); return; }
                           toast({ title: t.mapViewer.copy, description: `${copiedCount} value(s) copied` });
                         } else if (contextMenu.type === 'xAxis') {
@@ -4454,6 +4582,18 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                     >
                       {t.mapViewer.copy}
                     </button>
+                    {contextMenu.type === 'cell' && (
+                      <button
+                        className="px-3 py-1.5 text-left rounded hover:bg-white/10 transition-colors"
+                        onClick={() => {
+                          const copiedCount = copyCellSelection(true);
+                          if (copiedCount > 0) toast({ title: t.mapViewer.copyWithAxes, description: `${copiedCount} value(s) copied` });
+                          setContextMenu(null);
+                        }}
+                      >
+                        {t.mapViewer.copyWithAxes}
+                      </button>
+                    )}
 
                     {/* Paste */}
                     <button
@@ -4554,12 +4694,12 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                         } else if (contextMenu.type === 'xAxis') {
                           selectedXAxisCells.forEach(index => mutateDisplayXAxis(index, cur => {
                             const v = parseFloat(cur);
-                            return isNaN(v) ? cur : (applyIncrement(v, 1)).toString();
+                            return isNaN(v) ? cur : (applyAxisIncrement(v, 1)).toString();
                           }));
                         } else if (contextMenu.type === 'yAxis') {
                           selectedYAxisCells.forEach(index => mutateDisplayYAxis(index, cur => {
                             const v = parseFloat(cur);
-                            return isNaN(v) ? cur : (applyIncrement(v, 1)).toString();
+                            return isNaN(v) ? cur : (applyAxisIncrement(v, 1)).toString();
                           }));
                         }
                         setContextMenu(null);
@@ -4582,12 +4722,12 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                         } else if (contextMenu.type === 'xAxis') {
                           selectedXAxisCells.forEach(index => mutateDisplayXAxis(index, cur => {
                             const v = parseFloat(cur);
-                            return isNaN(v) ? cur : (applyIncrement(v, -1)).toString();
+                            return isNaN(v) ? cur : (applyAxisIncrement(v, -1)).toString();
                           }));
                         } else if (contextMenu.type === 'yAxis') {
                           selectedYAxisCells.forEach(index => mutateDisplayYAxis(index, cur => {
                             const v = parseFloat(cur);
-                            return isNaN(v) ? cur : (applyIncrement(v, -1)).toString();
+                            return isNaN(v) ? cur : (applyAxisIncrement(v, -1)).toString();
                           }));
                         }
                         setContextMenu(null);
@@ -4989,7 +5129,7 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                 className="px-3 py-1.5 text-left rounded hover:bg-white/10 transition-colors"
                 onClick={() => {
                   if (contextMenu.type === 'cell') {
-                    const copiedCount = copyCellSelection();
+                    const copiedCount = copyCellSelection(selectedXAxisCells.size > 0 || selectedYAxisCells.size > 0);
                     if (copiedCount === 0) { setContextMenu(null); return; }
                     toast({ title: t.mapViewer.copy, description: `${copiedCount} value(s) copied` });
                   } else if (contextMenu.type === 'xAxis') {
@@ -5165,12 +5305,12 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                   } else if (contextMenu.type === 'xAxis') {
                     selectedXAxisCells.forEach(index => mutateDisplayXAxis(index, cur => {
                       const parsed = Number(cur?.replace(',', '.'));
-                      return Number.isNaN(parsed) ? cur : applyIncrement(parsed, 1).toString();
+                      return Number.isNaN(parsed) ? cur : applyAxisIncrement(parsed, 1).toString();
                     }));
                   } else if (contextMenu.type === 'yAxis') {
                     selectedYAxisCells.forEach(index => mutateDisplayYAxis(index, cur => {
                       const parsed = Number(cur?.replace(',', '.'));
-                      return Number.isNaN(parsed) ? cur : applyIncrement(parsed, 1).toString();
+                      return Number.isNaN(parsed) ? cur : applyAxisIncrement(parsed, 1).toString();
                     }));
                   }
                   setContextMenu(null);
@@ -5195,12 +5335,12 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                   } else if (contextMenu.type === 'xAxis') {
                     selectedXAxisCells.forEach(index => mutateDisplayXAxis(index, cur => {
                       const parsed = Number(cur?.replace(',', '.'));
-                      return Number.isNaN(parsed) ? cur : applyIncrement(parsed, -1).toString();
+                      return Number.isNaN(parsed) ? cur : applyAxisIncrement(parsed, -1).toString();
                     }));
                   } else if (contextMenu.type === 'yAxis') {
                     selectedYAxisCells.forEach(index => mutateDisplayYAxis(index, cur => {
                       const parsed = Number(cur?.replace(',', '.'));
-                      return Number.isNaN(parsed) ? cur : applyIncrement(parsed, -1).toString();
+                      return Number.isNaN(parsed) ? cur : applyAxisIncrement(parsed, -1).toString();
                     }));
                   }
                   setContextMenu(null);
