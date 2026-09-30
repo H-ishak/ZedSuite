@@ -5029,19 +5029,6 @@ const [axesSwapped, setAxesSwapped] = useState<boolean>(false); // Track if axes
                         >
                           {parseAxisUnits().xUnit}
                         </div>
-                        {isAfrActive && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setAfrUnit((u) => (u === 'afr' ? 'lambda' : 'afr'));
-                            }}
-                            className="text-[8px] font-bold tracking-wider text-amber-500 py-0.5 leading-none select-none text-center hover:scale-110 transition-transform"
-                            title={t.mapViewer.afrToggleUnit}
-                          >
-                            {afrUnit === 'lambda' ? 'λ' : 'AFR :1'}
-                          </button>
-                        )}
                         <div
                           className="leading-tight truncate max-w-full px-0.5 text-center"
                           style={{ fontSize: 'var(--zs-axis-unit-font, 8px)', color: theme === 'light' ? 'rgba(0, 0, 0, 0.5)' : 'rgba(255, 255, 255, 0.5)' }}
